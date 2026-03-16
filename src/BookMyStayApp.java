@@ -1,75 +1,56 @@
-abstract class Room {
+import java.util.HashMap;
+import java.util.Map;
+class RoomInventory {
 
-            String roomType;
-            int beds;
-            int size;
-            double price;
+    private HashMap<String, Integer> inventory;
 
-            Room(String roomType, int beds, int size, double price) {
-                this.roomType = roomType;
-                this.beds = beds;
-                this.size = size;
-                this.price = price;
-            }
+    public RoomInventory() {
+        inventory = new HashMap<>();
 
-            void displayDetails() {
-                System.out.println("Room Type : " + roomType);
-                System.out.println("Beds      : " + beds);
-                System.out.println("Size      : " + size + " sq ft");
-                System.out.println("Price     : $" + price);
-            }
+        inventory.put("Single Room", 10);
+        inventory.put("Double Room", 6);
+        inventory.put("Suite Room", 3);
+    }
+
+    public int getAvailability(String roomType) {
+        return inventory.getOrDefault(roomType, 0);
+    }
+
+    public void updateAvailability(String roomType, int newCount) {
+        inventory.put(roomType, newCount);
+    }
+
+    public void displayInventory() {
+        System.out.println("\n--- Current Room Inventory ---");
+
+        for (Map.Entry<String, Integer> entry : inventory.entrySet()) {
+            System.out.println(entry.getKey() + " : " + entry.getValue() + " available");
         }
+    }
+}
 
-        class SingleRoom extends Room {
+public class BookMyStayApp {
 
-            SingleRoom() {
-                super("Single Room", 1, 200, 100);
-            }
-        }
+    public static void main(String[] args) {
 
-        class DoubleRoom extends Room {
+        System.out.println("=================================");
+        System.out.println("     Book My Stay Application    ");
+        System.out.println("     Hotel Booking System        ");
+        System.out.println("         Version 3.1             ");
+        System.out.println("=================================");
 
-            DoubleRoom() {
-                super("Double Room", 2, 350, 180);
-            }
-        }
+        RoomInventory inventory = new RoomInventory();
 
-        class SuiteRoom extends Room {
+        inventory.displayInventory();
 
-            SuiteRoom() {
-                super("Suite Room", 3, 500, 300);
-            }
-        }
+        System.out.println("\nChecking availability of Double Room...");
+        System.out.println("Available: " + inventory.getAvailability("Double Room"));
 
-        public class BookMyStayApp {
+        System.out.println("\nUpdating availability of Double Room...");
+        inventory.updateAvailability("Double Room", 5);
 
-            public static void main(String[] args) {
+        inventory.displayInventory();
 
-                System.out.println("=================================");
-                System.out.println("     Book My Stay Application    ");
-                System.out.println("     Hotel Booking System        ");
-                System.out.println("         Version 2.1             ");
-                System.out.println("=================================");
-
-                Room single = new SingleRoom();
-                Room doubleRoom = new DoubleRoom();
-                Room suite = new SuiteRoom();
-
-                int singleAvailable = 10;
-                int doubleAvailable = 6;
-                int suiteAvailable = 3;
-
-                System.out.println("\n--- Room Details ---");
-
-                single.displayDetails();
-                System.out.println("Available : " + singleAvailable + "\n");
-
-                doubleRoom.displayDetails();
-                System.out.println("Available : " + doubleAvailable + "\n");
-
-                suite.displayDetails();
-                System.out.println("Available : " + suiteAvailable + "\n");
-
-                System.out.println("Application finished.");
-            }
-        }
+        System.out.println("\nApplication finished.");
+    }
+}
