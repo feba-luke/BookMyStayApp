@@ -14,6 +14,7 @@ class Reservation {
     private String roomType;
     private int roomsBooked;
     private double baseAmount;
+    private boolean cancelled;
 
     public Reservation(String reservationId, String guestName, String roomType,
                        int roomsBooked, double baseAmount) {
@@ -22,14 +23,31 @@ class Reservation {
         this.roomType = roomType;
         this.roomsBooked = roomsBooked;
         this.baseAmount = baseAmount;
+        this.cancelled = false;
     }
 
     public String getReservationId() {
         return reservationId;
     }
 
+    public String getRoomType() {
+        return roomType;
+    }
+
+    public int getRoomsBooked() {
+        return roomsBooked;
+    }
+
     public double getBaseAmount() {
         return baseAmount;
+    }
+
+    public boolean isCancelled() {
+        return cancelled;
+    }
+
+    public void cancel() {
+        this.cancelled = true;
     }
 
     @Override
@@ -38,7 +56,8 @@ class Reservation {
                 ", Guest: " + guestName +
                 ", Room: " + roomType +
                 ", Rooms: " + roomsBooked +
-                ", Base Amount: ₹" + baseAmount;
+                ", Base Amount: ₹" + baseAmount +
+                ", Status: " + (cancelled ? "Cancelled" : "Confirmed");
     }
 }
 
@@ -93,6 +112,15 @@ class BookingHistory {
 
     public List<Reservation> getAll() {
         return history;
+    }
+
+    public Reservation findById(String reservationId) {
+        for (Reservation r : history) {
+            if (r.getReservationId().equals(reservationId)) {
+                return r;
+            }
+        }
+        return null;
     }
 }
 
@@ -154,10 +182,59 @@ class BookingService {
         return r;
     }
 
+    public Map<String, Integer> getInventory() {
+        return inventory;
+    }
+
+    public void restoreInventory(String roomType, int count) {
+        inventory.put(roomType, inventory.getOrDefault(roomType, 0) + count);
+    }
+
     public void showInventory() {
         System.out.println("\nInventory:");
         for (var e : inventory.entrySet()) {
             System.out.println(e.getKey() + ": " + e.getValue());
+        }
+    }
+}
+
+// ================== CANCELLATION SERVICE ==================
+class CancellationService {
+    private Stack<String> rollbackStack = new Stack<>();
+
+    public void cancelBooking(String reservationId, BookingHistory history, BookingService bookingService) {
+        Reservation reservation = history.findById(reservationId);
+
+        if (reservation == null) {
+            System.out.println("Cancellation failed: Reservation does not exist.");
+            return;
+        }
+
+        if (reservation.isCancelled()) {
+            System.out.println("Cancellation failed: Reservation is already cancelled.");
+            return;
+        }
+
+        rollbackStack.push(reservationId);
+
+        bookingService.restoreInventory(reservation.getRoomType(), reservation.getRoomsBooked());
+
+        reservation.cancel();
+
+        System.out.println("Booking cancelled successfully for reservation ID: " + reservationId);
+        System.out.println("Inventory restored for " + reservation.getRoomsBooked() +
+                " " + reservation.getRoomType() + " room(s).");
+    }
+
+    public void showRollbackHistory() {
+        System.out.println("\n--- Rollback History (Most Recent First) ---");
+        if (rollbackStack.isEmpty()) {
+            System.out.println("No cancellations recorded.");
+            return;
+        }
+
+        for (int i = rollbackStack.size() - 1; i >= 0; i--) {
+            System.out.println(rollbackStack.get(i));
         }
     }
 }
@@ -173,13 +250,17 @@ class ReportService {
 
     public void showSummary(List<Reservation> list, AddOnServiceManager addOnManager) {
         double total = 0;
+        int activeBookings = 0;
 
         for (Reservation r : list) {
-            total += r.getBaseAmount();
-            total += addOnManager.calculateCost(r.getReservationId());
+            if (!r.isCancelled()) {
+                total += r.getBaseAmount();
+                total += addOnManager.calculateCost(r.getReservationId());
+                activeBookings++;
+            }
         }
 
-        System.out.println("\nTotal Bookings: " + list.size());
+        System.out.println("\nTotal Active Bookings: " + activeBookings);
         System.out.println("Total Revenue (with add-ons): ₹" + total);
     }
 }
@@ -194,6 +275,7 @@ public class BookMyStayApp {
         BookingHistory history = new BookingHistory();
         AddOnServiceManager addOnManager = new AddOnServiceManager();
         BookingService bookingService = new BookingService(history);
+        CancellationService cancellationService = new CancellationService();
         ReportService reportService = new ReportService();
 
         try {
@@ -210,16 +292,15 @@ public class BookMyStayApp {
 
             System.out.print("Enter Room Count: ");
             int count = sc.nextInt();
+            sc.nextLine();
 
             Reservation r = bookingService.book(id, name, type, count);
 
             System.out.println("Booking Successful!");
 
-            // Add-on selection
             addOnManager.addService(id, new AddOnService("WiFi", 200));
             addOnManager.addService(id, new AddOnService("Breakfast", 500));
 
-            // Show bill
             double total = r.getBaseAmount() + addOnManager.calculateCost(id);
 
             System.out.println("\nFinal Bill:");
@@ -227,13 +308,21 @@ public class BookMyStayApp {
             System.out.println("Add-On Cost: ₹" + addOnManager.calculateCost(id));
             System.out.println("Total Amount: ₹" + total);
 
+            System.out.print("\nDo you want to cancel this booking? (yes/no): ");
+            String cancelChoice = sc.nextLine();
+
+            if (cancelChoice.equalsIgnoreCase("yes")) {
+                cancellationService.cancelBooking(id, history, bookingService);
+            }
+
         } catch (InvalidBookingException e) {
             System.out.println("Error: " + e.getMessage());
         }
 
-        // Reporting
+        bookingService.showInventory();
         reportService.showHistory(history.getAll());
         reportService.showSummary(history.getAll(), addOnManager);
+        cancellationService.showRollbackHistory();
 
         sc.close();
     }
