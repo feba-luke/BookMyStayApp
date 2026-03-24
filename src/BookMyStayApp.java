@@ -30,6 +30,10 @@ class Reservation {
         return reservationId;
     }
 
+    public String getGuestName() {
+        return guestName;
+    }
+
     public String getRoomType() {
         return roomType;
     }
@@ -127,7 +131,7 @@ class BookingHistory {
 // ================== VALIDATOR ==================
 class Validator {
     private static final Set<String> VALID_TYPES =
-            new HashSet<>(Arrays.asList("Standard", "Deluxe", "Suite"));
+            new HashSet<>(Arrays.asList("Standard", "Deluxe", "Suite", "Single", "Double"));
 
     public static void validate(String type, int count, Map<String, Integer> inventory)
             throws InvalidBookingException {
@@ -152,6 +156,7 @@ class Validator {
 class BookingService {
 
     private Map<String, Integer> inventory = new HashMap<>();
+    private Map<String, Queue<String>> roomIds = new HashMap<>();
     private BookingHistory history;
 
     public BookingService(BookingHistory history) {
@@ -160,14 +165,36 @@ class BookingService {
         inventory.put("Standard", 2);
         inventory.put("Deluxe", 2);
         inventory.put("Suite", 1);
+
+        Queue<String> standardRooms = new LinkedList<>();
+        standardRooms.offer("Standard-1");
+        standardRooms.offer("Standard-2");
+
+        Queue<String> deluxeRooms = new LinkedList<>();
+        deluxeRooms.offer("Deluxe-1");
+        deluxeRooms.offer("Deluxe-2");
+
+        Queue<String> suiteRooms = new LinkedList<>();
+        suiteRooms.offer("Suite-1");
+
+        roomIds.put("Standard", standardRooms);
+        roomIds.put("Deluxe", deluxeRooms);
+        roomIds.put("Suite", suiteRooms);
     }
 
-    public Reservation book(String id, String name, String type, int count)
+    public synchronized Reservation book(String id, String name, String type, int count)
             throws InvalidBookingException {
 
         Validator.validate(type, count, inventory);
 
         inventory.put(type, inventory.get(type) - count);
+
+        for (int i = 0; i < count; i++) {
+            Queue<String> ids = roomIds.get(type);
+            if (ids != null && !ids.isEmpty()) {
+                ids.poll();
+            }
+        }
 
         double basePrice = switch (type) {
             case "Standard" -> 2000;
@@ -177,17 +204,39 @@ class BookingService {
         };
 
         Reservation r = new Reservation(id, name, type, count, basePrice * count);
-
         history.add(r);
         return r;
     }
 
-    public Map<String, Integer> getInventory() {
-        return inventory;
+    public synchronized void restoreInventory(String roomType, int count) {
+        inventory.put(roomType, inventory.getOrDefault(roomType, 0) + count);
+
+        Queue<String> ids = roomIds.computeIfAbsent(roomType, k -> new LinkedList<>());
+        int start = ids.size() + 1;
+        for (int i = 0; i < count; i++) {
+            ids.offer(roomType + "-R" + (start + i));
+        }
     }
 
-    public void restoreInventory(String roomType, int count) {
-        inventory.put(roomType, inventory.getOrDefault(roomType, 0) + count);
+    public synchronized boolean hasAvailableRoom(String roomType) {
+        return inventory.getOrDefault(roomType, 0) > 0;
+    }
+
+    public synchronized String allocateSingleRoomId(String roomType) {
+        if (!hasAvailableRoom(roomType)) {
+            return null;
+        }
+
+        inventory.put(roomType, inventory.get(roomType) - 1);
+        Queue<String> ids = roomIds.get(roomType);
+        if (ids == null || ids.isEmpty()) {
+            return roomType + "-Auto";
+        }
+        return ids.poll();
+    }
+
+    public Map<String, Integer> getInventory() {
+        return inventory;
     }
 
     public void showInventory() {
@@ -216,9 +265,7 @@ class CancellationService {
         }
 
         rollbackStack.push(reservationId);
-
         bookingService.restoreInventory(reservation.getRoomType(), reservation.getRoomsBooked());
-
         reservation.cancel();
 
         System.out.println("Booking cancelled successfully for reservation ID: " + reservationId);
@@ -235,6 +282,112 @@ class CancellationService {
 
         for (int i = rollbackStack.size() - 1; i >= 0; i--) {
             System.out.println(rollbackStack.get(i));
+        }
+    }
+}
+
+// ================== CONCURRENT BOOKING REQUEST ==================
+class BookingTask {
+    private String reservationId;
+    private String guestName;
+    private String roomType;
+
+    public BookingTask(String reservationId, String guestName, String roomType) {
+        this.reservationId = reservationId;
+        this.guestName = guestName;
+        this.roomType = roomType;
+    }
+
+    public String getReservationId() {
+        return reservationId;
+    }
+
+    public String getGuestName() {
+        return guestName;
+    }
+
+    public String getRoomType() {
+        return roomType;
+    }
+}
+
+// ================== BOOKING REQUEST QUEUE ==================
+class BookingRequestQueue {
+    private Queue<BookingTask> requestQueue = new LinkedList<>();
+
+    public void addRequest(BookingTask task) {
+        requestQueue.offer(task);
+    }
+
+    public BookingTask getNextRequest() {
+        return requestQueue.poll();
+    }
+
+    public boolean isEmpty() {
+        return requestQueue.isEmpty();
+    }
+}
+
+// ================== ROOM ALLOCATION SERVICE ==================
+class RoomAllocationService {
+    private BookingHistory history;
+
+    public RoomAllocationService(BookingHistory history) {
+        this.history = history;
+    }
+
+    public void allocateRoom(BookingTask task, BookingService bookingService) {
+        try {
+            Reservation reservation = bookingService.book(
+                    task.getReservationId(),
+                    task.getGuestName(),
+                    task.getRoomType(),
+                    1
+            );
+
+            String roomId = task.getRoomType() + "-allocated";
+            System.out.println("Booking confirmed for Guest: " +
+                    reservation.getGuestName() + ", Room ID: " + roomId);
+
+        } catch (InvalidBookingException e) {
+            System.out.println("Booking failed for Guest: " +
+                    task.getGuestName() + ", Reason: " + e.getMessage());
+        }
+    }
+}
+
+// ================== CONCURRENT BOOKING PROCESSOR ==================
+class ConcurrentBookingProcessor implements Runnable {
+
+    private BookingRequestQueue bookingQueue;
+    private BookingService bookingService;
+    private RoomAllocationService allocationService;
+
+    public ConcurrentBookingProcessor(
+            BookingRequestQueue bookingQueue,
+            BookingService bookingService,
+            RoomAllocationService allocationService
+    ) {
+        this.bookingQueue = bookingQueue;
+        this.bookingService = bookingService;
+        this.allocationService = allocationService;
+    }
+
+    @Override
+    public void run() {
+        while (true) {
+            BookingTask task;
+
+            synchronized (bookingQueue) {
+                if (bookingQueue.isEmpty()) {
+                    break;
+                }
+                task = bookingQueue.getNextRequest();
+            }
+
+            synchronized (bookingService) {
+                allocationService.allocateRoom(task, bookingService);
+            }
         }
     }
 }
@@ -269,7 +422,6 @@ class ReportService {
 public class BookMyStayApp {
 
     public static void main(String[] args) {
-
         Scanner sc = new Scanner(System.in);
 
         BookingHistory history = new BookingHistory();
@@ -277,6 +429,7 @@ public class BookMyStayApp {
         BookingService bookingService = new BookingService(history);
         CancellationService cancellationService = new CancellationService();
         ReportService reportService = new ReportService();
+        RoomAllocationService allocationService = new RoomAllocationService(history);
 
         try {
             bookingService.showInventory();
@@ -317,6 +470,32 @@ public class BookMyStayApp {
 
         } catch (InvalidBookingException e) {
             System.out.println("Error: " + e.getMessage());
+        }
+
+        System.out.println("\n================ CONCURRENT BOOKING SIMULATION ================");
+
+        BookingRequestQueue bookingQueue = new BookingRequestQueue();
+        bookingQueue.addRequest(new BookingTask("R201", "Abhi", "Standard"));
+        bookingQueue.addRequest(new BookingTask("R202", "Vanamthi", "Deluxe"));
+        bookingQueue.addRequest(new BookingTask("R203", "Kural", "Suite"));
+        bookingQueue.addRequest(new BookingTask("R204", "Subha", "Standard"));
+
+        Thread t1 = new Thread(
+                new ConcurrentBookingProcessor(bookingQueue, bookingService, allocationService)
+        );
+
+        Thread t2 = new Thread(
+                new ConcurrentBookingProcessor(bookingQueue, bookingService, allocationService)
+        );
+
+        t1.start();
+        t2.start();
+
+        try {
+            t1.join();
+            t2.join();
+        } catch (InterruptedException e) {
+            System.out.println("Thread execution interrupted.");
         }
 
         bookingService.showInventory();
